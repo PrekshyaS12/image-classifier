@@ -9,3 +9,6 @@ __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
+test_detect.py
+test_output.jpg
+yolov8n.pt

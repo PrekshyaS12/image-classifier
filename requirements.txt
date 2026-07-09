@@ -8,3 +8,4 @@ streamlit
 pillow
 plotly
 psutil
+ultralytics
