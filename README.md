@@ -1,6 +1,6 @@
 # Image AI System — CIFAR-10 Classifier + YOLOv8 Object Detection
 
-A dual-capability computer vision web application combining image classification (MobileNetV2 transfer learning on CIFAR-10) and real-time object detection (YOLOv8), deployed as an interactive Streamlit web app.
+A dual-capability computer vision web application combining image classification (MobileNetV2 transfer learning on CIFAR-10) and real-time object detection (YOLOv8), deployed as an interactive Streamlit web app with Grad-CAM explainability.
 
 ---
 
@@ -11,6 +11,8 @@ This project combines two distinct computer vision capabilities in one applicati
 **Image Classification** — Given a colour image, predict which of 10 predefined CIFAR-10 categories it belongs to, with confidence scores for all classes. The same technology powers Google Lens, content moderation systems, and medical imaging tools.
 
 **Object Detection** — Given any real-world photo, detect and spatially locate multiple objects simultaneously using bounding boxes. The same approach is used in autonomous vehicles, surveillance systems, and robotics perception pipelines.
+
+**Explainability** — Every classification prediction comes with a Grad-CAM visualization showing exactly which part of the image the model focused on, so predictions (including incorrect ones) can actually be understood, not just trusted blindly.
 
 ---
 
@@ -42,11 +44,13 @@ image-classifier/
 ├── detect.py                  ← YOLOv8 detection helper (root level)
 ├── test_detect.py             ← test script to verify YOLOv8 works
 ├── app/
-│   └── streamlit_app.py       ← Streamlit web app (both tabs)
+│   └── streamlit_app.py       ← Streamlit web app (both tabs + Grad-CAM)
 ├── models/
-│   └── best_model.h5          ← trained CIFAR-10 model (download from Colab)
+│   └── best_model.h5          ← trained CIFAR-10 model
 ├── notebooks/
-│   └── image_classifier.ipynb ← training notebook (run in Colab)
+│   └── image_classifier.ipynb ← training notebook (Colab or local)
+├── plots/
+│   └── gradcam_*.png          ← saved Grad-CAM comparisons from the notebook
 ├── src/                       ← source utilities
 ├── requirements.txt
 ├── .gitignore
@@ -63,11 +67,12 @@ pip install -r requirements.txt
 ```
 
 ### Step 2 — Train the CIFAR-10 classifier
-Open `notebooks/image_classifier.ipynb` in Google Colab and run all cells.
+Open `notebooks/image_classifier.ipynb` — this can be run either:
+- **In Google Colab** (original workflow, useful for free GPU access) — includes a Drive-mount cell at the start and a download cell at the end for pulling the trained model off Colab's cloud instance.
+- **Locally** (e.g. VS Code / Jupyter) — skip the two Colab-specific cells (Drive mount and file download); everything else uses local relative paths and works as-is. `ModelCheckpoint` saves the trained model directly to `models/` during training, so no manual download step is needed locally.
 
-### Step 3 — Download the trained model
-After training finishes, download `models/best_model.h5` from Colab.
-Place it in the `models/` folder on your local machine.
+### Step 3 — Confirm the trained model is present
+After training, `models/best_model.h5` should exist on disk (either downloaded from Colab or saved automatically if trained locally).
 
 ### Step 4 — Verify YOLOv8 is working
 ```bash
@@ -94,8 +99,19 @@ Open your browser at `http://localhost:8501`
 ### Key Observations
 - **Automobile and ship** score highest — distinctive shapes even at 32×32 resolution
 - **Cat and dog** are hardest to classify — they share similar visual texture at low resolution
-- The cat/dog confusion is a known CIFAR-10 challenge: at 32×32 pixels, the model must rely on texture rather than shape, which Grad-CAM visualisation confirms
 - MobileNetV2 pretrained weights provide a 3–5% accuracy gain over a custom CNN with the same training data
+
+---
+
+## Explainability — Grad-CAM
+
+Every prediction — correct or incorrect — comes with a Grad-CAM heatmap showing which region of the image most influenced the model's decision.
+
+**A key technical detail:** MobileNetV2 downsamples the image by a factor of 32 as it passes through the network. At the model's 64×64 input size, the *final* convolutional layer produces only a 2×2 feature map — too coarse to meaningfully localize anything. Instead, Grad-CAM here targets an earlier internal layer (`block_13_expand_relu`), which produces a 4×4 feature map and gives genuinely useful, spatially meaningful heatmaps.
+
+**What this revealed:** on correct predictions, the heatmap consistently lands directly on the actual object (e.g. centered precisely on a bird's head, or a horse's body). On misclassifications, the heatmap often explains *why* the model got it wrong — for example, a bird photographed against diagonal tree branches was misclassified as "airplane," with the heatmap showing the model had fixated on the branch lines rather than the bird itself.
+
+This is available live in the Streamlit app (Tab 1, under "Why did the model predict this?") for any uploaded image, and as saved comparison plots in `plots/` from the notebook.
 
 ### YOLOv8 Object Detection
 - Detects 80 object categories in any uploaded image
@@ -111,7 +127,7 @@ Open your browser at `http://localhost:8501`
 - Real-time prediction with confidence score
 - Interactive Plotly bar chart for all 10 classes
 - Top 3 predictions ranked with progress bars
-- Grad-CAM visual explainability (shows which image regions drove prediction)
+- Grad-CAM visual explainability (shows which image regions drove the prediction, live for any uploaded image)
 - Sidebar shows model type and input size automatically
 
 ### Tab 2 — Object Detection (YOLOv8)

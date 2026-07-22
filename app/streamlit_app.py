@@ -19,6 +19,10 @@ from tensorflow.keras.models import load_model
 import plotly.graph_objects as go
 import os
 import sys
+import tensorflow as tf
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # Add root folder to path so we can import detect.py from root
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -82,6 +86,108 @@ def prepare_image(uploaded_image):
     img_arr = np.array(img).astype('float32') / 255.0
     img_arr = np.expand_dims(img_arr, axis=0)
     return img_arr
+
+
+# ================================================================
+# GRAD-CAM — Model Explainability
+# ================================================================
+# Shows which part of the image the model focused on when making
+# its prediction. Targets an earlier internal MobileNetV2 layer
+# (block_13_expand_relu) rather than the final layer, since the
+# model's 64x64 input leaves only a 2x2 feature map at the very end
+# — too coarse to localize anything meaningfully. The earlier layer
+# gives a 4x4 grid, which produces genuinely useful heatmaps.
+
+@st.cache_resource
+def build_gradcam_extractor(_model):
+    """
+    Locates the nested MobileNetV2 submodel inside the loaded model and
+    builds a small feature-extractor model targeting an earlier internal
+    layer for better spatial resolution. Returns None if the loaded model
+    isn't a transfer-learning model (e.g. if best_model.h5 turned out to
+    be the custom CNN instead) — Grad-CAM is skipped gracefully in that case.
+    """
+    nested_base = None
+    base_index = None
+    for i, layer in enumerate(_model.layers):
+        if isinstance(layer, tf.keras.Model):
+            nested_base = layer
+            base_index = i
+            break
+
+    if nested_base is None:
+        return None
+
+    layers_after_base = _model.layers[base_index + 1:]
+    target_layer_name = "block_13_expand_relu"
+
+    try:
+        feature_extractor = tf.keras.Model(
+            inputs=nested_base.input,
+            outputs=[nested_base.get_layer(target_layer_name).output, nested_base.output]
+        )
+    except ValueError:
+        return None
+
+    return {"feature_extractor": feature_extractor, "layers_after_base": layers_after_base}
+
+
+def compute_gradcam(gradcam_bundle, prepared_image):
+    """
+    Runs Grad-CAM on a single prepared image (already resized/normalized,
+    shape (1, H, W, 3)) and returns a 32x32 heatmap array in 0-1 range.
+    """
+    feature_extractor = gradcam_bundle["feature_extractor"]
+    layers_after_base = gradcam_bundle["layers_after_base"]
+
+    img = tf.cast(prepared_image, tf.float32)
+
+    with tf.GradientTape() as tape:
+        conv_output, base_out = feature_extractor(img, training=False)
+        tape.watch(conv_output)
+        x = base_out
+        for layer in layers_after_base:
+            x = layer(x, training=False)
+        preds = x
+        top_class = tf.argmax(preds[0])
+        score = preds[:, top_class]
+
+    grads = tape.gradient(score, conv_output)
+    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))
+    heatmap = (conv_output[0] @ pooled[..., tf.newaxis]).numpy().squeeze()
+    heatmap = np.maximum(heatmap, 0)
+    if heatmap.max() > 0:
+        heatmap = heatmap / heatmap.max()
+
+    heatmap_resized = np.array(
+        tf.image.resize([heatmap[:, :, np.newaxis]], [32, 32])
+    ).squeeze()
+
+    return heatmap_resized
+
+
+def make_overlay_figure(original_image, heatmap):
+    """
+    Returns a matplotlib figure with the original image, the raw heatmap,
+    and the overlay side by side, styled for display in Streamlit.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(9, 3.2))
+
+    axes[0].imshow(original_image)
+    axes[0].set_title("Original", fontsize=10)
+    axes[0].axis("off")
+
+    axes[1].imshow(heatmap, cmap="jet")
+    axes[1].set_title("Heatmap\n(bright = focused here)", fontsize=10)
+    axes[1].axis("off")
+
+    axes[2].imshow(original_image)
+    axes[2].imshow(heatmap, cmap="jet", alpha=0.5)
+    axes[2].set_title("Overlay", fontsize=10)
+    axes[2].axis("off")
+
+    plt.tight_layout()
+    return fig
 
 
 # ================================================================
@@ -151,7 +257,7 @@ tab1, tab2 = st.tabs([
 
 
 # ================================================================
-# TAB 1 — IMAGE CLASSIFICATION (your original code, unchanged)
+# TAB 1 — IMAGE CLASSIFICATION
 # ================================================================
 
 with tab1:
@@ -240,6 +346,44 @@ with tab1:
                 pct   = float(predictions[idx]) * 100
                 st.write(f"{medal}: **{emoji} {name}** — {pct:.1f}%")
                 st.progress(int(pct))
+
+            # ================================================================
+            # GRAD-CAM SECTION — Why did the model predict this?
+            # ================================================================
+            st.markdown("---")
+            st.subheader("🔬 Why did the model predict this?")
+            st.caption(
+                "Grad-CAM highlights the region of the image the model focused on "
+                "most when making its prediction. Bright red/yellow = high influence."
+            )
+
+            gradcam_bundle = build_gradcam_extractor(model)
+
+            if gradcam_bundle is None:
+                st.info(
+                    "Grad-CAM isn't available for this model's architecture "
+                    "(expected a transfer-learning model with a nested base network)."
+                )
+            else:
+                with st.spinner("Generating explanation..."):
+                    heatmap = compute_gradcam(gradcam_bundle, prepared)
+                    original_for_display = np.array(image.resize((32, 32)))
+                    gradcam_fig = make_overlay_figure(original_for_display, heatmap)
+
+                gcol1, gcol2 = st.columns([2, 1])
+                with gcol1:
+                    st.pyplot(gradcam_fig, use_container_width=True)
+                with gcol2:
+                    st.markdown("**How to read this:**")
+                    st.markdown(
+                        "- 🔴 **Red/orange** — strongest influence on the prediction\n"
+                        "- 🔵 **Blue** — little to no influence\n\n"
+                        "If the highlighted region doesn't line up with the actual "
+                        "object, that's often a sign the model got confused by "
+                        "background texture or shape — which can help explain "
+                        "an incorrect prediction."
+                    )
+                plt.close(gradcam_fig)
 
         else:
             st.info("👆 Upload an image on the left to see the prediction here!")
