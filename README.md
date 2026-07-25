@@ -74,13 +74,7 @@ Open `notebooks/image_classifier.ipynb` — this can be run either:
 ### Step 3 — Confirm the trained model is present
 After training, `models/best_model.h5` should exist on disk (either downloaded from Colab or saved automatically if trained locally).
 
-### Step 4 — Verify YOLOv8 is working
-```bash
-python test_detect.py
-```
-You should see detected objects printed in the terminal and a `test_output.jpg` file saved with bounding boxes drawn. If this works, object detection is ready.
-
-### Step 5 — Launch the web app
+### Step 4 — Launch the web app
 ```bash
 streamlit run app/streamlit_app.py
 ```
@@ -94,7 +88,7 @@ Open your browser at `http://localhost:8501`
 | Model | Test Accuracy |
 |---|---|
 | Custom CNN | 75–76% |
-| Transfer Learning (MobileNetV2) | 78–80% ✅ Best |
+| Transfer Learning (MobileNetV2) | 78–80% |
 
 ### Key Observations
 - **Automobile and ship** score highest — distinctive shapes even at 32×32 resolution
